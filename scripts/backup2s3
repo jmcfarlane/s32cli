@@ -1,0 +1,120 @@
+#! /usr/bin/env python
+
+# Python imports
+import optparse
+import os
+import time
+
+# Third party imports
+from boto import s3
+
+def getopts():
+    p = optparse.OptionParser('Usage: %prog -s path -d bucket:path [options]')
+    p.add_option('-D', '--delete',
+                 action='store_true',
+                 dest='do_delete',
+                 help='Delete from s3 when not in source, and "startwith" dest')
+    p.add_option('-b', '--bucket',
+                 dest='bucket',
+                 help='Destination bucket in s3')
+    p.add_option('-d', '--destination',
+                 dest='destination',
+                 help='Destination path, usually same as source')
+    p.add_option('-n', '--dry-run',
+                 action='store_true',
+                 dest='dry_run',
+                 help='Dry run, does not actually upload/delete anything')
+    p.add_option('-s', '--source',
+                 dest='source',
+                 help='Source directory to be synced to s3')
+    p.add_option('-v', '--version',
+                 action='store_true',
+                 dest='version',
+                 help='Display current version of this program')
+    p.add_option('-w', '--wait',
+                 dest='wait',
+                 help='Seconds to wait before running a live sync')
+
+    # Defaults
+    p.set_defaults(destination='')
+    p.set_defaults(do_delete=False)
+    p.set_defaults(dry_run=False)
+    p.set_defaults(wait=5)
+
+    return p.parse_args()
+
+def source2s3(options, path):
+    if options.destination:
+        without_leading_slash = path.split(options.source).pop()[1:]
+        path = os.path.join(options.destination, without_leading_slash)
+
+    if path.startswith('.'):
+        return path[1:]
+    else:
+        return path
+
+def main():
+    print time.strftime('%c', time.localtime())
+    options, args = getopts()
+
+    if not options.dry_run:
+        print 'This is not a dry run, please use -n if want that'
+        print 'Proceeding with live run in %s seconds...' % options.wait
+        time.sleep(int(options.wait))
+
+    # Create s3 connection, bucket, and key objects
+    conn = s3.Connection()
+    bucket = conn.get_bucket(options.bucket)
+    key = s3.key.Key(bucket)
+
+    # Collect list of files on disk, and their destination(s) on s3
+    source_dict = {}
+    for dirpath, dirnames, filenames in os.walk(options.source):
+        for file in filenames:
+            path = os.path.join(dirpath, file)
+            source_dict[path] = source2s3(options, path)
+
+    # Collect the list of files currently in the bucket without
+    # leading slash (/).  We stript the leading slash, as you can't
+    # use os.path.join, because it'd already be a rooted path.
+    s3_files = [os.path.join(os.path.sep, k.name) for k in bucket.list()]
+
+    # Upload any files in the source not in the destination
+    for source, dest in source_dict.iteritems():
+        if dest not in s3_files:
+            print 'Uploding:', source
+            print '      To:', dest, '[%s]' % options.bucket,
+            if options.dry_run:
+                print '[dry run]'
+            else:
+                key.key = dest
+                key.set_contents_from_filename(source)
+                print '[uploaded]'
+
+    # Delete any files in the destination, but not the source
+    if options.do_delete:
+        for path in s3_files:
+            # Skip files who don't share a common prefix.  Say you
+            # have two scripts backing up different directories into
+            # the same bucket, we don't want each script trying to
+            # delete the other's content.
+            if options.destination:
+                expected_prefix = options.destination
+            else:
+                expected_prefix = options.source
+
+            if not path.startswith(expected_prefix):
+                print 'Skipping:', path, '[unrelated to this backup]'
+                continue
+
+            if path not in source_dict.values():
+                print 'Deleting from s3:', path,
+                if options.dry_run:
+                    print '[dry run]'
+                else:
+                    key.key = path
+                    key.delete()
+                    print '[deleted]'
+
+if __name__ == '__main__':
+    main()
