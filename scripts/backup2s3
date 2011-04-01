@@ -34,12 +34,20 @@ def getopts():
     p.add_option('-w', '--wait',
                  dest='wait',
                  help='Seconds to wait before running a live sync')
+    p.add_option('-k', '--keyid',
+                 dest='keyid',
+                 help='s3 access key id (AWS_ACCESS_KEY_ID)')
+    p.add_option('-a', '--accesskey',
+                 dest='accesskey',
+                 help='s3 secret access key (AWS_SECRET_ACCESS_KEY)')
 
     # Defaults
     p.set_defaults(destination='')
     p.set_defaults(do_delete=False)
     p.set_defaults(dry_run=False)
     p.set_defaults(wait=5)
+    p.set_defaults(keyid='')
+    p.set_defaults(accesskey='')
 
     return p.parse_args()
 
@@ -62,8 +70,18 @@ def main():
         print 'Proceeding with live run in %s seconds...' % options.wait
         time.sleep(int(options.wait))
 
+    if ((options.keyid and not options.accesskey) or
+       (options.accesskey and not options.keyid)):
+        print 'If one of -k/--keyid or -a/--accesskey is used, then both'
+        print 'must be specified. Alternatively, set AWS_ACCESS_KEYID and'
+        print 'AWS_SECRET_ACCESS_KEY environment variables.'
+        return 1
+
     # Create s3 connection, bucket, and key objects
-    conn = s3.Connection()
+    if (options.keyid and options.accesskey):
+        conn = s3.Connection(options.keyid,options.accesskey)
+    else:
+        conn = s3.Connection()
     bucket = conn.get_bucket(options.bucket)
     key = s3.key.Key(bucket)
 
