@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 
 # Python imports
+import hashlib
 import optparse
 import os
 import time
@@ -14,6 +15,14 @@ def getopts():
                  action='store_true',
                  dest='do_delete',
                  help='Delete from s3 when not in source, and "startwith" dest')
+    p.add_option('-H', '--calculate-sha1',
+                 action='store_true',
+                 dest='do_sha1',
+                 help='Consider sha1 hash when file appears to be out of date')
+    p.add_option('-T', '--compare-timestamps',
+                 action='store_true',
+                 dest='do_timestamp',
+                 help='Check timestamps and re-upload to s3 if necessary')
     p.add_option('-b', '--bucket',
                  dest='bucket',
                  help='Destination bucket in s3')
@@ -44,6 +53,8 @@ def getopts():
     # Defaults
     p.set_defaults(destination='')
     p.set_defaults(do_delete=False)
+    p.set_defaults(do_sha1=False)
+    p.set_defaults(do_timestamp=False)
     p.set_defaults(dry_run=False)
     p.set_defaults(wait=5)
     p.set_defaults(keyid='')
@@ -99,13 +110,22 @@ def main():
 
     # Upload any files in the source not in the destination
     for source, dest in source_dict.iteritems():
-        if dest not in s3_files:
-            print 'Uploding:', source
+        mtime = str(os.path.getmtime(source))
+        if options.do_sha1:
+            sha1 = hashlib.sha512(open(source).read()).hexdigest()
+        else:
+            sha1 = None
+
+        if dest not in s3_files or source_newer(options, bucket, dest, mtime):
+            print 'Uploding:', source, '(%s)' % mtime
             print '      To:', dest, '[%s]' % options.bucket,
             if options.dry_run:
                 print '[dry run]'
             else:
                 key.key = dest
+                key.set_metadata('mtime', mtime)
+                if sha1:
+                    key.set_metadata('sha1', sha1)
                 key.set_contents_from_filename(source)
                 print '[uploaded]'
 
@@ -133,6 +153,13 @@ def main():
                     key.key = path
                     key.delete()
                     print '[deleted]'
+
+def source_newer(options, bucket, s3_path, mtime):
+    if options.do_timestamp:
+        asset_key = bucket.get_key(s3_path)
+        s3_mtime = asset_key.get_metadata('mtime')
+        if s3_mtime and s3_mtime != mtime:
+            return True
 
 if __name__ == '__main__':
     main()
